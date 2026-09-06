@@ -27,7 +27,6 @@ def procesar_chk(data: CardRequest):
       raise HTTPException(status_code=400, detail="Formato inválido")
     numero, mes, anio, cvv = partes
 
-    # Crear el PaymentMethod primero para evitar el bloqueo de Stripe
     pm = stripe.PaymentMethod.create(
         type="card",
         card={
@@ -38,7 +37,6 @@ def procesar_chk(data: CardRequest):
         },
     )
 
-    # Crear el PaymentIntent usando el método de pago creado
     intent = stripe.PaymentIntent.create(
         amount=100,
         currency="usd",
