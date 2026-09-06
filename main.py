@@ -1,12 +1,13 @@
 import os
 import braintree
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI()
 
-# Conectamos con Braintree usando las llaves de tu Sandbox guardadas en Render
+# Conectamos con Braintree usando las llaves guardadas en Render
+# (Asegúrate de cambiar a braintree.Environment.Production si usas llaves reales)
 gateway = braintree.BraintreeGateway(
     braintree.Configuration(
         environment=braintree.Environment.Sandbox,
@@ -16,7 +17,7 @@ gateway = braintree.BraintreeGateway(
     )
 )
 
-# Estructura flexible para soportar tanto los nombres largos como los cortos que envía el bot
+# Estructura flexible para recibir cualquier formato de tarjeta que envíe el bot
 class CardCheckRequest(BaseModel):
     card_number: Optional[str] = None
     cc_number: Optional[str] = None
@@ -27,7 +28,7 @@ class CardCheckRequest(BaseModel):
     cvv: Optional[str] = None
 
 def procesar_pago(amount: str, data: CardCheckRequest):
-    # Unificamos los campos para que funcionen sin importar cómo los envíe el bot
+    # Unificamos los campos automáticamente
     num = data.card_number or data.cc_number
     mes = data.expiration_month or data.exp_month
     anio = data.expiration_year or data.exp_year
@@ -61,10 +62,12 @@ def procesar_pago(amount: str, data: CardCheckRequest):
             "message": result.message
         }
 
-# Soportamos tanto /check-card como /api/v1/charge y /api/v1/ccn-auth para que el bot no falle nunca con 404
+# Cubrimos ABSOLUTAMENTE TODAS las rutas posibles para evitar el error 404
 @app.post("/check-card")
 @app.post("/api/v1/charge")
 @app.post("/api/v1/ccn-auth")
+@app.post("/charge")
+@app.post("/ccn-auth")
 async def check_card(data: CardCheckRequest):
     try:
         return procesar_pago("1.00", data)
@@ -72,3 +75,4 @@ async def check_card(data: CardCheckRequest):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
