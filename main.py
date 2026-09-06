@@ -5,12 +5,11 @@ import stripe
 
 app = FastAPI()
 
-# Lee la llave secreta real de forma segura desde las variables de entorno de Render
 stripe.api_key = os.getenv("STRIPE_API_KEY")
 
 
 class CardRequest(BaseModel):
-  card: str  # Formato: NUM|MM|AAAA|CVV
+  card: str
   gate: str
 
 
@@ -28,21 +27,24 @@ def procesar_chk(data: CardRequest):
       raise HTTPException(status_code=400, detail="Formato inválido")
     numero, mes, anio, cvv = partes
 
-    intent = stripe.PaymentIntent.create(
-        amount=100,  # $1.00 USD
-        currency="usd",
-        payment_method_types=["card"],
-        payment_method_data={
-            "type": "card",
-            "card": {
-                "number": numero,
-                "exp_month": int(mes),
-                "exp_year": int(anio),
-                "cvc": cvv,
-            },
+    # Crear el PaymentMethod primero para evitar el bloqueo de Stripe
+    pm = stripe.PaymentMethod.create(
+        type="card",
+        card={
+            "number": numero,
+            "exp_month": int(mes),
+            "exp_year": int(anio),
+            "cvc": cvv,
         },
+    )
+
+    # Crear el PaymentIntent usando el método de pago creado
+    intent = stripe.PaymentIntent.create(
+        amount=100,
+        currency="usd",
+        payment_method=pm.id,
         confirm=True,
-        automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+        off_session=True,
     )
 
     if intent.status == "succeeded":
@@ -119,21 +121,22 @@ def procesar_pp(data: CardRequest):
       raise HTTPException(status_code=400, detail="Formato inválido")
     numero, mes, anio, cvv = partes
 
-    intent = stripe.PaymentIntent.create(
-        amount=500,  # $5.00 USD
-        currency="usd",
-        payment_method_types=["card"],
-        payment_method_data={
-            "type": "card",
-            "card": {
-                "number": numero,
-                "exp_month": int(mes),
-                "exp_year": int(anio),
-                "cvc": cvv,
-            },
+    pm = stripe.PaymentMethod.create(
+        type="card",
+        card={
+            "number": numero,
+            "exp_month": int(mes),
+            "exp_year": int(anio),
+            "cvc": cvv,
         },
+    )
+
+    intent = stripe.PaymentIntent.create(
+        amount=500,
+        currency="usd",
+        payment_method=pm.id,
         confirm=True,
-        automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+        off_session=True,
     )
 
     if intent.status == "succeeded":
@@ -179,21 +182,21 @@ def procesar_masivo(data: MassCardRequest):
       monto = 500 if "pp" in data.gate else (100 if "gt" in data.gate else 0)
 
       if monto > 0:
+        pm = stripe.PaymentMethod.create(
+            type="card",
+            card={
+                "number": numero,
+                "exp_month": int(mes),
+                "exp_year": int(anio),
+                "cvc": cvv,
+            },
+        )
         intent = stripe.PaymentIntent.create(
             amount=monto,
             currency="usd",
-            payment_method_types=["card"],
-            payment_method_data={
-                "type": "card",
-                "card": {
-                    "number": numero,
-                    "exp_month": int(mes),
-                    "exp_year": int(anio),
-                    "cvc": cvv,
-                },
-            },
+            payment_method=pm.id,
             confirm=True,
-            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+            off_session=True,
         )
         if intent.status == "succeeded":
           resultados.append(
