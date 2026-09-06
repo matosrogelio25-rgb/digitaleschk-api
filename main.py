@@ -1,13 +1,9 @@
 import os
 import braintree
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 
-# Conectamos con Braintree usando las llaves guardadas en Render
-# (Asegúrate de cambiar a braintree.Environment.Production si usas llaves reales)
 gateway = braintree.BraintreeGateway(
     braintree.Configuration(
         environment=braintree.Environment.Sandbox,
@@ -17,33 +13,28 @@ gateway = braintree.BraintreeGateway(
     )
 )
 
-# Estructura flexible para recibir cualquier formato de tarjeta que envíe el bot
-class CardCheckRequest(BaseModel):
-    card_number: Optional[str] = None
-    cc_number: Optional[str] = None
-    expiration_month: Optional[str] = None
-    exp_month: Optional[str] = None
-    expiration_year: Optional[str] = None
-    exp_year: Optional[str] = None
-    cvv: Optional[str] = None
+async def manejar_peticion_tarjeta(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="El cuerpo de la petición no es un JSON válido.")
 
-def procesar_pago(amount: str, data: CardCheckRequest):
-    # Unificamos los campos automáticamente
-    num = data.card_number or data.cc_number
-    mes = data.expiration_month or data.exp_month
-    anio = data.expiration_year or data.exp_year
-    cvv_val = data.cvv
+    # Extraemos los campos buscando múltiples variantes posibles enviadas por el bot
+    num = body.get("card_number") or body.get("cc_number") or body.get("number")
+    mes = body.get("expiration_month") or body.get("exp_month") or body.get("mes")
+    anio = body.get("expiration_year") or body.get("exp_year") or body.get("anio") or body.get("year")
+    cvv_val = body.get("cvv") or body.get("cvc")
 
     if not all([num, mes, anio, cvv_val]):
-        raise HTTPException(status_code=400, detail="Faltan datos de la tarjeta.")
+        raise HTTPException(status_code=400, detail=f"Faltan datos de la tarjeta. Recibido: {body}")
 
     result = gateway.transaction.sale({
-        "amount": amount,
+        "amount": "1.00",
         "credit_card": {
-            "number": num,
-            "expiration_month": mes,
-            "expiration_year": anio,
-            "cvv": cvv_val
+            "number": str(num).strip(),
+            "expiration_month": str(mes).strip(),
+            "expiration_year": str(anio).strip(),
+            "cvv": str(cvv_val).strip()
         },
         "options": {
             "submit_for_settlement": True
@@ -62,17 +53,10 @@ def procesar_pago(amount: str, data: CardCheckRequest):
             "message": result.message
         }
 
-# Cubrimos ABSOLUTAMENTE TODAS las rutas posibles para evitar el error 404
 @app.post("/check-card")
 @app.post("/api/v1/charge")
 @app.post("/api/v1/ccn-auth")
 @app.post("/charge")
 @app.post("/ccn-auth")
-async def check_card(data: CardCheckRequest):
-    try:
-        return procesar_pago("1.00", data)
-    except HTTPException as he:
-        raise he
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+async def check_card_alias(request: Request):
+    return await manejar_peticion_tarjeta(request)
