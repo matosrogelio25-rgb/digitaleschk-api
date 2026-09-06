@@ -1,7 +1,8 @@
 import os
 import braintree
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
 
 app = FastAPI()
 
@@ -15,41 +16,59 @@ gateway = braintree.BraintreeGateway(
     )
 )
 
-# Estructura de los datos de la tarjeta que recibirá la API
+# Estructura flexible para soportar tanto los nombres largos como los cortos que envía el bot
 class CardCheckRequest(BaseModel):
-    card_number: str
-    expiration_month: str
-    expiration_year: str
-    cvv: str
+    card_number: Optional[str] = None
+    cc_number: Optional[str] = None
+    expiration_month: Optional[str] = None
+    exp_month: Optional[str] = None
+    expiration_year: Optional[str] = None
+    exp_year: Optional[str] = None
+    cvv: Optional[str] = None
 
+def procesar_pago(amount: str, data: CardCheckRequest):
+    # Unificamos los campos para que funcionen sin importar cómo los envíe el bot
+    num = data.card_number or data.cc_number
+    mes = data.expiration_month or data.exp_month
+    anio = data.expiration_year or data.exp_year
+    cvv_val = data.cvv
+
+    if not all([num, mes, anio, cvv_val]):
+        raise HTTPException(status_code=400, detail="Faltan datos de la tarjeta.")
+
+    result = gateway.transaction.sale({
+        "amount": amount,
+        "credit_card": {
+            "number": num,
+            "expiration_month": mes,
+            "expiration_year": anio,
+            "cvv": cvv_val
+        },
+        "options": {
+            "submit_for_settlement": True
+        }
+    })
+
+    if result.is_success:
+        return {
+            "status": "Approved",
+            "message": "¡Aprobada!",
+            "transaction_id": result.transaction.id
+        }
+    else:
+        return {
+            "status": "Declined",
+            "message": result.message
+        }
+
+# Soportamos tanto /check-card como /api/v1/charge y /api/v1/ccn-auth para que el bot no falle nunca con 404
 @app.post("/check-card")
+@app.post("/api/v1/charge")
+@app.post("/api/v1/ccn-auth")
 async def check_card(data: CardCheckRequest):
     try:
-        # Intentamos procesar la transacción de prueba en Braintree por $1.00 USD
-        result = gateway.transaction.sale({
-            "amount": "1.00",
-            "credit_card": {
-                "number": data.card_number,
-                "expiration_month": data.expiration_month,
-                "expiration_year": data.expiration_year,
-                "cvv": data.cvv
-            },
-            "options": {
-                "submit_for_settlement": True
-            }
-        })
-
-        if result.is_success:
-            return {
-                "status": "Approved",
-                "message": "¡Aprobada!",
-                "transaction_id": result.transaction.id
-            }
-        else:
-            return {
-                "status": "Declined",
-                "message": result.message
-            }
-            
+        return procesar_pago("1.00", data)
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
