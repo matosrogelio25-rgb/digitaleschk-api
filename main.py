@@ -1,258 +1,55 @@
 import os
+import braintree
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import stripe
 
 app = FastAPI()
 
-stripe.api_key = os.getenv("STRIPE_API_KEY")
-
-
-class CardRequest(BaseModel):
-  card: str
-  gate: str
-
-
-class MassCardRequest(BaseModel):
-  cards: list[str]
-  gate: str
-
-
-# --- GATE 1: CC CHARGED (/chk - $1.00 USD) ---
-@app.post("/api/v1/charge")
-def procesar_chk(data: CardRequest):
-  try:
-    partes = data.card.split("|")
-    if len(partes) != 4:
-      raise HTTPException(status_code=400, detail="Formato inválido")
-    numero, mes, anio, cvv = partes
-
-    pm = stripe.PaymentMethod.create(
-        type="card",
-        card={
-            "number": numero,
-            "exp_month": int(mes),
-            "exp_year": int(anio),
-            "cvc": cvv,
-        },
+# Conectamos con Braintree usando las llaves de tu Sandbox guardadas en Render
+gateway = braintree.BraintreeGateway(
+    braintree.Configuration(
+        environment=braintree.Environment.Sandbox,
+        merchant_id=os.environ.get("BT_MERCHANT_ID"),
+        public_key=os.environ.get("BT_PUBLIC_KEY"),
+        private_key=os.environ.get("BT_PRIVATE_KEY")
     )
+)
 
-    intent = stripe.PaymentIntent.create(
-        amount=100,
-        currency="usd",
-        payment_method=pm.id,
-        confirm=True,
-        off_session=True,
-    )
+# Estructura de los datos de la tarjeta que recibirá la API
+class CardCheckRequest(BaseModel):
+    card_number: str
+    expiration_month: str
+    expiration_year: str
+    cvv: str
 
-    if intent.status == "succeeded":
-      return {
-          "status": "success",
-          "message": "success",
-          "response": "Approved ✅ [Charged $1.00 USD]",
-      }
-    else:
-      return {
-          "status": "declined",
-          "message": "declined",
-          "response": f"Declined ❌ [Estado: {intent.status}]",
-      }
-  except stripe.error.CardError as e:
-    err = e.error
-    return {
-        "status": "declined",
-        "message": "declined",
-        "response": f"Declined ❌ [{err.decline_code or err.code}: {err.message}]",
-    }
-  except Exception as e:
-    return {
-        "status": "error",
-        "message": "declined",
-        "response": f"Error ❌ [{str(e)}]",
-    }
-
-
-# --- GATE 2: CCN AUTH (/ccn - $0 USD) ---
-@app.post("/api/v1/ccn-auth")
-def procesar_ccn(data: CardRequest):
-  try:
-    partes = data.card.split("|")
-    if len(partes) != 4:
-      raise HTTPException(status_code=400, detail="Formato inválido")
-    numero, mes, anio, cvv = partes
-
-    stripe.PaymentMethod.create(
-        type="card",
-        card={
-            "number": numero,
-            "exp_month": int(mes),
-            "exp_year": int(anio),
-            "cvc": cvv,
-        },
-    )
-    return {
-        "status": "success",
-        "message": "success",
-        "response": "Approved ✅ [Auth $0 - Verificada]",
-    }
-  except stripe.error.CardError as e:
-    err = e.error
-    return {
-        "status": "declined",
-        "message": "declined",
-        "response": f"Declined ❌ [{err.decline_code or err.code}: {err.message}]",
-    }
-  except Exception as e:
-    return {
-        "status": "error",
-        "message": "declined",
-        "response": f"Error ❌ [{str(e)}]",
-    }
-
-
-# --- GATE 3: PAYPAL CHARGED (/pp - $5.00 USD) ---
-@app.post("/api/v1/paypal-charge")
-def procesar_pp(data: CardRequest):
-  try:
-    partes = data.card.split("|")
-    if len(partes) != 4:
-      raise HTTPException(status_code=400, detail="Formato inválido")
-    numero, mes, anio, cvv = partes
-
-    pm = stripe.PaymentMethod.create(
-        type="card",
-        card={
-            "number": numero,
-            "exp_month": int(mes),
-            "exp_year": int(anio),
-            "cvc": cvv,
-        },
-    )
-
-    intent = stripe.PaymentIntent.create(
-        amount=500,
-        currency="usd",
-        payment_method=pm.id,
-        confirm=True,
-        off_session=True,
-    )
-
-    if intent.status == "succeeded":
-      return {
-          "status": "success",
-          "message": "success",
-          "response": "Approved ✅ [PayPal Charged $5.00 USD]",
-      }
-    else:
-      return {
-          "status": "declined",
-          "message": "declined",
-          "response": f"Declined ❌ [Estado: {intent.status}]",
-      }
-  except stripe.error.CardError as e:
-    err = e.error
-    return {
-        "status": "declined",
-        "message": "declined",
-        "response": f"Declined ❌ [{err.decline_code or err.code}: {err.message}]",
-    }
-  except Exception as e:
-    return {
-        "status": "error",
-        "message": "declined",
-        "response": f"Error ❌ [{str(e)}]",
-    }
-
-
-# --- GATE 4: MASIVOS (/mdgt, /mdccn, /mdpp) ---
-@app.post("/api/v1/mass-process")
-def procesar_masivo(data: MassCardRequest):
-  resultados = []
-  for card in data.cards:
+@app.post("/check-card")
+async def check_card(data: CardCheckRequest):
     try:
-      partes = card.split("|")
-      if len(partes) != 4:
-        resultados.append(
-            {"card": card, "status": "declined", "response": "Format Error"}
-        )
-        continue
-      numero, mes, anio, cvv = partes
-      monto = 500 if "pp" in data.gate else (100 if "gt" in data.gate else 0)
-
-      if monto > 0:
-        pm = stripe.PaymentMethod.create(
-            type="card",
-            card={
-                "number": numero,
-                "exp_month": int(mes),
-                "exp_year": int(anio),
-                "cvc": cvv,
+        # Intentamos procesar la transacción de prueba en Braintree por $1.00 USD
+        result = gateway.transaction.sale({
+            "amount": "1.00",
+            "credit_card": {
+                "number": data.card_number,
+                "expiration_month": data.expiration_month,
+                "expiration_year": data.expiration_year,
+                "cvv": data.cvv
             },
-        )
-        intent = stripe.PaymentIntent.create(
-            amount=monto,
-            currency="usd",
-            payment_method=pm.id,
-            confirm=True,
-            off_session=True,
-        )
-        if intent.status == "succeeded":
-          resultados.append(
-              {
-                  "card": card,
-                  "status": "success",
-                  "message": "success",
-                  "response": "Approved ✅",
-              }
-          )
-        else:
-          resultados.append(
-              {
-                  "card": card,
-                  "status": "declined",
-                  "message": "declined",
-                  "response": f"Declined ❌ [Estado: {intent.status}]",
-              }
-          )
-      else:
-        stripe.PaymentMethod.create(
-            type="card",
-            card={
-                "number": numero,
-                "exp_month": int(mes),
-                "exp_year": int(anio),
-                "cvc": cvv,
-            },
-        )
-        resultados.append(
-            {
-                "card": card,
-                "status": "success",
-                "message": "success",
-                "response": "Approved ✅",
+            "options": {
+                "submit_for_settlement": True
             }
-        )
+        })
 
-    except stripe.error.CardError as e:
-      err = e.error
-      resultados.append(
-          {
-              "card": card,
-              "status": "declined",
-              "message": "declined",
-              "response": (
-                  f"Declined ❌ [{err.decline_code or err.code}:"
-                  f" {err.message}]"
-              ),
-          }
-      )
+        if result.is_success:
+            return {
+                "status": "Approved",
+                "message": "¡Aprobada!",
+                "transaction_id": result.transaction.id
+            }
+        else:
+            return {
+                "status": "Declined",
+                "message": result.message
+            }
+            
     except Exception as e:
-      resultados.append(
-          {
-              "card": card,
-              "status": "error",
-              "message": "declined",
-              "response": f"Error ❌ [{str(e)}]",
-          }
-      )
-  return {"results": resultados}
+        raise HTTPException(status_code=500, detail=str(e))
