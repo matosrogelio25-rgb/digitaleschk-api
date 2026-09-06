@@ -58,10 +58,11 @@ def procesar_chk(data: CardRequest):
           "response": f"Declined ❌ [Estado: {intent.status}]",
       }
   except stripe.error.CardError as e:
+    err = e.error
     return {
         "status": "declined",
         "message": "declined",
-        "response": f"Declined ❌ [{e.error.message}]",
+        "response": f"Declined ❌ [{err.decline_code or err.code}: {err.message}]",
     }
   except Exception as e:
     return {
@@ -95,10 +96,11 @@ def procesar_ccn(data: CardRequest):
         "response": "Approved ✅ [Auth $0 - Verificada]",
     }
   except stripe.error.CardError as e:
+    err = e.error
     return {
         "status": "declined",
         "message": "declined",
-        "response": f"Declined ❌ [{e.error.message}]",
+        "response": f"Declined ❌ [{err.decline_code or err.code}: {err.message}]",
     }
   except Exception as e:
     return {
@@ -147,10 +149,11 @@ def procesar_pp(data: CardRequest):
           "response": f"Declined ❌ [Estado: {intent.status}]",
       }
   except stripe.error.CardError as e:
+    err = e.error
     return {
         "status": "declined",
         "message": "declined",
-        "response": f"Declined ❌ [{e.error.message}]",
+        "response": f"Declined ❌ [{err.decline_code or err.code}: {err.message}]",
     }
   except Exception as e:
     return {
@@ -168,7 +171,9 @@ def procesar_masivo(data: MassCardRequest):
     try:
       partes = card.split("|")
       if len(partes) != 4:
-        resultados.append({"card": card, "status": "declined", "response": "Format Error"})
+        resultados.append(
+            {"card": card, "status": "declined", "response": "Format Error"}
+        )
         continue
       numero, mes, anio, cvv = partes
       monto = 500 if "pp" in data.gate else (100 if "gt" in data.gate else 0)
@@ -180,23 +185,73 @@ def procesar_masivo(data: MassCardRequest):
             payment_method_types=["card"],
             payment_method_data={
                 "type": "card",
-                "card": {"number": numero, "exp_month": int(mes), "exp_year": int(anio), "cvc": cvv},
+                "card": {
+                    "number": numero,
+                    "exp_month": int(mes),
+                    "exp_year": int(anio),
+                    "cvc": cvv,
+                },
             },
             confirm=True,
             automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
         )
-        aprobado = intent.status == "succeeded"
+        if intent.status == "succeeded":
+          resultados.append(
+              {
+                  "card": card,
+                  "status": "success",
+                  "message": "success",
+                  "response": "Approved ✅",
+              }
+          )
+        else:
+          resultados.append(
+              {
+                  "card": card,
+                  "status": "declined",
+                  "message": "declined",
+                  "response": f"Declined ❌ [Estado: {intent.status}]",
+              }
+          )
       else:
         stripe.PaymentMethod.create(
             type="card",
-            card={"number": numero, "exp_month": int(mes), "exp_year": int(anio), "cvc": cvv},
+            card={
+                "number": numero,
+                "exp_month": int(mes),
+                "exp_year": int(anio),
+                "cvc": cvv,
+            },
         )
-        aprobado = True
+        resultados.append(
+            {
+                "card": card,
+                "status": "success",
+                "message": "success",
+                "response": "Approved ✅",
+            }
+        )
 
-      if aprobado:
-        resultados.append({"card": card, "status": "success", "message": "success", "response": "Approved ✅"})
-      else:
-        resultados.append({"card": card, "status": "declined", "message": "declined", "response": "Declined ❌"})
-    except Exception:
-      resultados.append({"card": card, "status": "error", "message": "declined", "response": "Error ❌"})
+    except stripe.error.CardError as e:
+      err = e.error
+      resultados.append(
+          {
+              "card": card,
+              "status": "declined",
+              "message": "declined",
+              "response": (
+                  f"Declined ❌ [{err.decline_code or err.code}:"
+                  f" {err.message}]"
+              ),
+          }
+      )
+    except Exception as e:
+      resultados.append(
+          {
+              "card": card,
+              "status": "error",
+              "message": "declined",
+              "response": f"Error ❌ [{str(e)}]",
+          }
+      )
   return {"results": resultados}
