@@ -1,5 +1,6 @@
 fastapi
 uvicorn
-stripe
 pydantic
-requests
+stripe
+braintree
+authorizenet
