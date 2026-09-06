@@ -4,7 +4,6 @@ from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI()
 
-# Conectamos con Braintree usando las llaves de entorno configuradas en Render
 gateway = braintree.BraintreeGateway(
     braintree.Configuration(
         environment=braintree.Environment.Sandbox,
@@ -17,19 +16,32 @@ gateway = braintree.BraintreeGateway(
 async def manejar_peticion_tarjeta(request: Request):
     try:
         body = await request.json()
-        print("DATOS RECIBIDOS DEL BOT:", body) # Esto aparecerá en los logs de Render
+        print("DATOS RECIBIDOS DEL BOT:", body)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Error leyendo JSON: {str(e)}")
 
-    # Extraemos los campos buscando múltiples variantes posibles enviadas por el bot
-    num = body.get("card_number") or body.get("cc_number") or body.get("number")
-    mes = body.get("expiration_month") or body.get("exp_month") or body.get("mes")
-    anio = body.get("expiration_year") or body.get("exp_year") or body.get("anio") or body.get("year")
-    cvv_val = body.get("cvv") or body.get("cvc")
+    # 1. Buscamos si viene el campo 'card' unido por pipes (|) como en tu log
+    card_raw = body.get("card")
+    
+    if card_raw and "|" in str(card_raw):
+        partes = str(card_raw).split("|")
+        if len(partes) >= 4:
+            num = partes[0].strip()
+            mes = partes[1].strip()
+            anio = partes[2].strip()
+            cvv_val = partes[3].strip()
+        else:
+            raise HTTPException(status_code=400, detail="Formato de tarjeta inválido en 'card'.")
+    else:
+        # 2. Si por si acaso viene separado de la forma tradicional
+        num = body.get("card_number") or body.get("cc_number") or body.get("number")
+        mes = body.get("expiration_month") or body.get("exp_month") or body.get("mes")
+        anio = body.get("expiration_year") or body.get("exp_year") or body.get("anio") or body.get("year")
+        cvv_val = body.get("cvv") or body.get("cvc")
 
     if not all([num, mes, anio, cvv_val]):
-        print(f"FALTAN DATOS. Cuerpo recibido: {body}")
-        raise HTTPException(status_code=400, detail=f"Faltan datos de la tarjeta. Recibido: {body}")
+        print(f"FALTAN DATOS. Procesados -> Num: {num}, Mes: {mes}, Año: {anio}, CVV: {cvv_val}")
+        raise HTTPException(status_code=400, detail=f"Faltan datos de la tarjeta. Cuerpo: {body}")
 
     try:
         result = gateway.transaction.sale({
